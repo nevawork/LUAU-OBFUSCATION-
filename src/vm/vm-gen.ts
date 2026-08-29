@@ -1972,7 +1972,8 @@ function collatzEncodeString(s: string, seed: number): number[] {
 function buildEnvSetup(
   n: NameMap,
   level: VMGenLevel,
-  includeExecutor: boolean
+  includeExecutor: boolean,
+  robloxCompatible: boolean = false
 ): string {
   const genv = n.genv;
   const env = n.env;
@@ -1986,6 +1987,36 @@ function buildEnvSetup(
         code += `do local ok,v=pcall(function() return ${genv}["${g}"] end);if ok and v~=nil then ${env}["${g}"]=v end end\n`;
       }
     }
+    return code;
+  }
+
+  if (robloxCompatible) {
+    const safeDebug = randomName(3);
+    const debugKey = randomName(2);
+    const debugVal = randomName(2);
+    const debugIter = randomName(2);
+    const dangerousFns = ["getupvalue", "setupvalue", "getlocal", "setlocal", "sethook", "getinfo"];
+
+    let code = `local ${genv}=(type(getfenv)=="function" and getfenv(0))or _G\n`;
+    code += `local ${env}={}\n`;
+    code += `local ${safeDebug}={}\n`;
+    code += `for ${debugIter},${debugKey},${debugVal} in pairs(${genv}[${luaEsc("debug")}] or {}) do ${safeDebug}[${debugKey}]=${debugVal} end\n`;
+    for (const fn of dangerousFns) {
+      code += `${safeDebug}[${luaEsc(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}\n`;
+    }
+    code += `${genv}[${luaEsc("debug")}]=${safeDebug}\n`;
+
+    const coreEntries = CORE_GLOBALS.map(g => `${luaEsc(g)}=${genv}[${luaEsc(g)}]`).join(",");
+    code += `local _tmpenv=setmetatable({${coreEntries}},{__index=${genv}})\n`;
+    code += `for _dk,_dv in pairs(_tmpenv) do ${env}[_dk]=_dv end\n`;
+
+    if (includeExecutor) {
+      for (const g of EXECUTOR_GLOBALS) {
+        code += `do local _ok,_v=pcall(function() return ${genv}[${luaEsc(g)}] end);if _ok and _v~=nil then ${env}[${luaEsc(g)}]=_v end end\n`;
+      }
+    }
+
+    code += `setmetatable(${env},{__index=${genv}})\n`;
     return code;
   }
 
@@ -2119,8 +2150,10 @@ function buildEnvSetup(
   lines.push(`if not ${bRG}(${env},${encLookup("loadstring")}) then ${bRS}(${env},${encLookup("loadstring")},${bRG}(${env},${encLookup("load")})) end`);
 
   if (level === "max") {
-    const dbV = randomName(3);
-    const dbEnvV = randomName(3);
+    const safeDb = randomName(3);
+    const dbSrc = randomName(3);
+    const dbKey = randomName(2);
+    const dbVal = randomName(2);
     const dangerousFns = ["getupvalue", "setupvalue", "getlocal", "setlocal", "sethook", "getinfo"];
 
     for (let si = dangerousFns.length - 1; si > 0; si--) {
@@ -2128,19 +2161,17 @@ function buildEnvSetup(
       [dangerousFns[si], dangerousFns[sj]] = [dangerousFns[sj], dangerousFns[si]];
     }
 
-    lines.push(`do local ${dbV}=${bRG}(${genv},${encLookup("debug")})`);
-    lines.push(`if ${bTY}(${dbV})==${tblEsc} then`);
-    for (const fn of dangerousFns) {
-      lines.push(`${dbV}[${encLookup(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
-    }
+    lines.push(`local ${safeDb}={}`);
+    lines.push(`do local ${dbSrc}=${bRG}(${genv},${encLookup("debug")})`);
+    lines.push(`if ${bTY}(${dbSrc})==${tblEsc} then`);
+    lines.push(`for ${dbKey},${dbVal} in pairs(${dbSrc}) do ${safeDb}[${dbKey}]=${dbVal} end`);
     lines.push(`end`);
-
-    lines.push(`local ${dbEnvV}=${bRG}(${env},${encLookup("debug")})`);
-    lines.push(`if ${bTY}(${dbEnvV})==${tblEsc} then`);
+    lines.push(`end`);
     for (const fn of dangerousFns) {
-      lines.push(`${dbEnvV}[${encLookup(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
+      lines.push(`${safeDb}[${encLookup(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
     }
-    lines.push(`end end`);
+    lines.push(`${genv}[${encLookup("debug")}]=${safeDb}`);
+    lines.push(`${env}[${encLookup("debug")}]=${safeDb}`);
   }
 
   return lines.join("\n") + "\n";
@@ -3359,6 +3390,8 @@ export interface VMGenOptions {
   forceFeatures?: FeatureFlag[];
 
   noCompression?: boolean;
+
+  robloxCompatible?: boolean;
 }
 
 function featureEnabled(options: VMGenOptions, flag: FeatureFlag, levelDefault: boolean): boolean {
@@ -3404,6 +3437,7 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
         "stringMutation", "adaptiveFragments", "stackPooling",
       ],
       forceFeatures: innerForced,
+      robloxCompatible: options.robloxCompatible,
     });
     const t1 = Date.now();
     console.log(`[telemetry:inner] inner_vm_size: ${innerVM.length} chars (${t1 - t0}ms)`);
@@ -3421,6 +3455,7 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
         vmId: "outer",
         polymorphicSeed: outerSeed,
         executorGlobals: true,
+        robloxCompatible: options.robloxCompatible,
       });
       const t3 = Date.now();
       console.log(`[telemetry:outer] outer_vm_size: ${outerVM.length} chars (${t3 - t2}ms)`);
@@ -3445,6 +3480,7 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
         vmId: "fallback",
         polymorphicSeed: outerSeed,
         executorGlobals: options.executorGlobals,
+        robloxCompatible: options.robloxCompatible,
       });
     }
   }
@@ -3496,7 +3532,7 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
 
   const n = createNames(level);
 
-  const envSetup = buildEnvSetup(n, level, includeExecutor);
+  const envSetup = buildEnvSetup(n, level, includeExecutor, options.robloxCompatible);
 
   const codeHash = featureEnabled(options, "antiTamper", level === "max") ? computeCodeHash(mappedCode) : 0;
 
@@ -3629,15 +3665,15 @@ export function generateVM(chunk: BytecodeChunk, options: VMGenOptions = {}): st
     output = minify(output);
   }
 
-  if (level === "max") {
+  if (level === "max" && !options.robloxCompatible) {
     output = wrapCustomCipher(output);
   }
 
-  if (level === "max") {
+  if (level === "max" && !options.robloxCompatible) {
     output = wrapNestedVM(output);
   }
 
-  if (level === "max" && !options.noCompression) {
+  if (level === "max" && !options.robloxCompatible && !options.noCompression) {
     output = wrapStubVM(output);
   }
 

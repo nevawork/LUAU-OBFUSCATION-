@@ -26,6 +26,7 @@ const advancedOpt = args.includes("--advanced");
 const maxOpt = args.includes("--max");
 const compressOpt = args.includes("--compress");
 const noCompressOpt = args.includes("--no-compress");
+const robloxCompatibleOpt = args.includes("--roblox") || args.includes("--roblox-compatible");
 const outIndex = args.findIndex((a) => a === "-o" || a === "--output");
 const outFile = outIndex >= 0 ? args[outIndex + 1] : null;
 const fileArgs = args.filter((a, i) =>
@@ -69,7 +70,7 @@ if (vmOpt) {
   if (vmDebug || args.includes("--no-vm-encode")) level = "debug";
   if (maxOpt || advancedOpt || productionOpt) level = "max";
 
-  output = generateVM(chunk, { level, executorGlobals: level !== "debug", noCompression: noCompressOpt });
+  output = generateVM(chunk, { level, executorGlobals: level !== "debug", noCompression: noCompressOpt, robloxCompatible: robloxCompatibleOpt });
 } else {
   const obfuscated = obfuscate(ast, {
     renameLocals: !noRename,
