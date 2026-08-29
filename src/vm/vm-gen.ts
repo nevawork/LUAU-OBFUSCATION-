@@ -2149,7 +2149,7 @@ function buildEnvSetup(
   lines.push(`if not ${bRG}(${env},${encLookup("unpack")}) then local _t=${bRG}(${env},${encLookup("table")});if _t then ${bRS}(${env},${encLookup("unpack")},_t[${encLookup("unpack")}]) end end`);
   lines.push(`if not ${bRG}(${env},${encLookup("loadstring")}) then ${bRS}(${env},${encLookup("loadstring")},${bRG}(${env},${encLookup("load")})) end`);
 
-  if (level === "max") {
+  if (level === "max" && !robloxCompatible) {
     const safeDb = randomName(3);
     const dbSrc = randomName(3);
     const dbKey = randomName(2);
@@ -2161,17 +2161,39 @@ function buildEnvSetup(
       [dangerousFns[si], dangerousFns[sj]] = [dangerousFns[sj], dangerousFns[si]];
     }
 
+    const isReadonlyLookup = encLookup("isreadonly");
+    const debugLookup = encLookup("debug");
+
     lines.push(`local ${safeDb}={}`);
-    lines.push(`do local ${dbSrc}=${bRG}(${genv},${encLookup("debug")})`);
+    lines.push(`do local ${dbSrc}=${bRG}(${genv},${debugLookup})`);
     lines.push(`if ${bTY}(${dbSrc})==${tblEsc} then`);
+    lines.push(`if ${bTY}(${bRG}(${genv},${isReadonlyLookup}))=="function" and ${bRG}(${genv},${isReadonlyLookup})(${dbSrc}) then`);
     lines.push(`for ${dbKey},${dbVal} in pairs(${dbSrc}) do ${safeDb}[${dbKey}]=${dbVal} end`);
+    lines.push(`${genv}[${debugLookup}]=${safeDb}`);
+    lines.push(`else`);
+    lines.push(`${safeDb}=${dbSrc}`);
+    lines.push(`end`);
     lines.push(`end`);
     lines.push(`end`);
     for (const fn of dangerousFns) {
       lines.push(`${safeDb}[${encLookup(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
     }
-    lines.push(`${genv}[${encLookup("debug")}]=${safeDb}`);
-    lines.push(`${env}[${encLookup("debug")}]=${safeDb}`);
+    lines.push(`${env}[${debugLookup}]=${safeDb}`);
+  } else if (level === "max" && robloxCompatible) {
+    const safeDb = randomName(3);
+    const dbKey = randomName(2);
+    const dbVal = randomName(2);
+    const dangerousFns = ["getupvalue", "setupvalue", "getlocal", "setlocal", "sethook", "getinfo"];
+
+    for (let si = dangerousFns.length - 1; si > 0; si--) {
+      const sj = Math.floor(rng() * (si + 1));
+      [dangerousFns[si], dangerousFns[sj]] = [dangerousFns[sj], dangerousFns[si]];
+    }
+
+    const debugLookup = encLookup("debug");
+    for (const fn of dangerousFns) {
+      lines.push(`${env}[${debugLookup}][${encLookup(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
+    }
   }
 
   return lines.join("\n") + "\n";

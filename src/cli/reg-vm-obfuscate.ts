@@ -14,6 +14,8 @@ let level: RegVMLevel = "normal";
 if (args.includes("--debug")) level = "debug";
 if (args.includes("--max")) level = "max";
 
+const robloxCompatible = args.includes("--roblox") || args.includes("--roblox-compatible");
+
 const outIndex = args.findIndex(a => a === "-o" || a === "--output");
 const outFile = outIndex >= 0 ? args[outIndex + 1] : null;
 const fileArgs = args.filter((a, i) =>
@@ -55,13 +57,14 @@ console.error(`[RegVM] Bytecode: ${chunk.code.length / 4} instructions, ${chunk.
 // Generate VM
 const disableFeatures: string[] = [];
 if (args.includes("--no-cff")) disableFeatures.push("controlFlowFlattening");
-const output = generateRegVM(chunk, {
-  level,
-  executorGlobals: level !== "debug",
-  polymorphicSeed: Date.now(),
-  debugTrace: false,
-  disableFeatures: disableFeatures as any[],
-});
+  const output = generateRegVM(chunk, {
+    level,
+    executorGlobals: level !== "debug",
+    polymorphicSeed: Date.now(),
+    debugTrace: false,
+    disableFeatures: disableFeatures as any[],
+    robloxCompatible,
+  });
 
 const elapsed = Date.now() - t0;
 console.error(`[RegVM] Output: ${output.length} chars (${elapsed}ms)`);

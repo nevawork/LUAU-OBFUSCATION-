@@ -194,13 +194,19 @@ Open [http://localhost:3000](http://localhost:3000) to access the obfuscation da
 npm run obfuscate -- input.lua
 ```
 
-**Obfuscate for Roblox LocalScript (maximum VM protection without dynamic loaders):**
+**Obfuscate for Roblox executors (full maximum VM protection):**
+
+```bash
+npm run obfuscate -- input.lua --vm --max -o output.lua
+```
+
+**Obfuscate for standard Roblox LocalScripts (maximum VM protection without dynamic loaders):**
 
 ```bash
 npm run obfuscate -- input.lua --vm --max --roblox -o output.lua
 ```
 
-The `--roblox` flag enables Roblox compatibility mode, which avoids dynamic-loader wrappers that require `loadstring` or `load` and prevents modifications to the readonly global `debug` table.
+The `--roblox` flag enables Roblox compatibility mode, which avoids dynamic-loader wrappers that require `loadstring` or `load` and prevents modifications to the readonly global `debug` table. All maximum bytecode protections (super operators, control flow flattening, string pools, etc.) are preserved in both modes.
 
 **Lex tokens:**
 

@@ -36,6 +36,8 @@ export interface RegVMGenOptions {
   _noWatermark?: boolean;
 
   target?: string;
+
+  robloxCompatible?: boolean;
 }
 
 interface BuildCtx {
@@ -73,6 +75,8 @@ interface BuildCtx {
   rotStep2: number;
   usedOps?: Set<number>;
   argPerm: number[][];
+
+  robloxCompatible?: boolean;
 }
 
 interface Fragment {
@@ -1857,6 +1861,35 @@ function buildEnvSetup(ctx: BuildCtx): string {
     return L.join("\n") + "\n";
   }
 
+  if (ctx.robloxCompatible) {
+    const safeDebug = randomName(3);
+    const debugKey = randomName(2);
+    const debugVal = randomName(2);
+
+    L.push(`local ${n.genv}=(type(getfenv)=="function" and getfenv(0)) or _G`);
+    L.push(`local ${n.env}={}`);
+    L.push(`local ${safeDebug}={}`);
+    L.push(`for ${debugKey},${debugVal} in pairs(${n.genv}[${luaEsc("debug")}] or {}) do ${safeDebug}[${debugKey}]=${debugVal} end`);
+    const dangerousFns = ["getupvalue", "setupvalue", "getlocal", "setlocal", "sethook", "getinfo"];
+    for (const fn of dangerousFns) {
+      L.push(`${safeDebug}[${luaEsc(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`);
+    }
+    L.push(`${n.genv}[${luaEsc("debug")}]=${safeDebug}`);
+
+    const coreEntries = CORE_GLOBALS.map(g => `${luaEsc(g)}=${n.genv}[${luaEsc(g)}]`).join(",");
+    L.push(`local _tmpenv=setmetatable({${coreEntries}},{__index=${n.genv}})`);
+    L.push(`for _dk,_dv in pairs(_tmpenv) do ${n.env}[_dk]=_dv end`);
+
+    if (ctx.includeExecutor) {
+      for (const g of EXECUTOR_GLOBALS) {
+        L.push(`do local _ok,_v=pcall(function() return ${n.genv}[${luaEsc(g)}] end);if _ok and _v~=nil then ${n.env}[${luaEsc(g)}]=_v end end`);
+      }
+    }
+
+    L.push(`setmetatable(${n.env},{__index=${n.genv}})`);
+    return L.join("\n") + "\n";
+  }
+
   const envKey = 1 + Math.floor(rng() * 254);
   const envStep = 1 + Math.floor(rng() * 254);
 
@@ -1896,6 +1929,35 @@ function buildEnvFragments(ctx: BuildCtx): { fragments: Fragment[]; forwardDecls
   const n = ctx.names;
   const fragments: Fragment[] = [];
   const forwardDecls: string[] = [];
+
+  if (ctx.robloxCompatible) {
+    const safeDebug = randomName(3);
+    const debugKey = randomName(2);
+    const debugVal = randomName(2);
+
+    fragments.push({ code: `local ${n.genv}=(type(getfenv)=="function" and getfenv(0)) or _G`, layer: 0 });
+    fragments.push({ code: `local ${n.env}={}`, layer: 0 });
+    fragments.push({ code: `local ${safeDebug}={}`, layer: 0 });
+    fragments.push({ code: `for ${debugKey},${debugVal} in pairs(${n.genv}[${luaEsc("debug")}] or {}) do ${safeDebug}[${debugKey}]=${debugVal} end`, layer: 0 });
+    const dangerousFns = ["getupvalue", "setupvalue", "getlocal", "setlocal", "sethook", "getinfo"];
+    for (const fn of dangerousFns) {
+      fragments.push({ code: `${safeDebug}[${luaEsc(fn)}]=${fn === "getinfo" ? "function() return {} end" : "nil"}`, layer: 0 });
+    }
+    fragments.push({ code: `${n.genv}[${luaEsc("debug")}]=${safeDebug}`, layer: 0 });
+
+    const coreEntries = CORE_GLOBALS.map(g => `${luaEsc(g)}=${n.genv}[${luaEsc(g)}]`).join(",");
+    fragments.push({ code: `local _tmpenv=setmetatable({${coreEntries}},{__index=${n.genv}})`, layer: 0 });
+    fragments.push({ code: `for _dk,_dv in pairs(_tmpenv) do ${n.env}[_dk]=_dv end`, layer: 0 });
+
+    if (ctx.includeExecutor) {
+      for (const g of EXECUTOR_GLOBALS) {
+        fragments.push({ code: `do local _ok,_v=pcall(function() return ${n.genv}[${luaEsc(g)}] end);if _ok and _v~=nil then ${n.env}[${luaEsc(g)}]=_v end end`, layer: 0 });
+      }
+    }
+
+    fragments.push({ code: `setmetatable(${n.env},{__index=${n.genv}})`, layer: 0 });
+    return { fragments, forwardDecls };
+  }
 
   const envKey = 1 + Math.floor(rng() * 254);
   const envStep = 1 + Math.floor(rng() * 254);
@@ -3325,6 +3387,7 @@ export function generateRegVM(chunk: RegBytecodeChunk, options: RegVMGenOptions 
   const doShuffle = level !== "debug" && featureEnabled(options, "opcodeShuffle", true);
   const encodeStrings = level !== "debug" && featureEnabled(options, "stringEncoding", true);
   const includeExecutor = options.executorGlobals ?? (level !== "debug");
+  const robloxCompatible = options.robloxCompatible ?? false;
 
   const { encode, decode } = shuffleOpcodes(doShuffle);
 
@@ -3371,6 +3434,7 @@ export function generateRegVM(chunk: RegBytecodeChunk, options: RegVMGenOptions 
     spiralPrime, spiralOffset, layerVariants,
     dispatchVariant, dispatchMask, rotSeed, rotStep, rotStep2,
     argPerm: generateArgPerms(isObf),
+    robloxCompatible,
   };
 
   const doFusion = featureEnabled(options, "opcodeFusion", level !== "debug");
@@ -3667,7 +3731,7 @@ export function generateRegVM(chunk: RegBytecodeChunk, options: RegVMGenOptions 
     console.log(`[RegVM] DUMP_RAW: saved ${output.length} chars to debug-vm-raw.lua`);
   }
 
-  if (level !== "debug" && process.env.NO_CIPHER !== '1') {
+  if (level !== "debug" && process.env.NO_CIPHER !== '1' && !robloxCompatible) {
     const vmRawLen = Buffer.byteLength(output, 'utf-8');
     console.log(`[RegVM] Blob: encrypting VM runtime (${vmRawLen} bytes)...`);
     const { blob: vmBlob, xorKey, invSbox, checksum, origLen: vmOrigLen } = encryptAndEncode(output, rng);

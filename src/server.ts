@@ -55,6 +55,7 @@ app.post("/api/obfuscate", (req: express.Request, res: express.Response) => {
     const oneLineOpt = opts.oneLine === true;
     const vmType = opts.vmType || "none";
     const vmLevel = opts.vmLevel || "normal";
+    const robloxCompatible = opts.robloxCompatible === true;
 
     console.log(`[API] /api/obfuscate - VM: ${vmType}, Level: ${vmLevel}, length: ${code.length}`);
 
@@ -87,6 +88,7 @@ app.post("/api/obfuscate", (req: express.Request, res: express.Response) => {
       output = generateVM(chunk, {
         level: vmLevel as any,
         executorGlobals: vmLevel !== "debug",
+        robloxCompatible,
       });
     } else if (vmType === "register") {
 
@@ -105,6 +107,7 @@ app.post("/api/obfuscate", (req: express.Request, res: express.Response) => {
         executorGlobals: vmLevel !== "debug",
         polymorphicSeed: Date.now(),
         disableFeatures: disableFeatures as any[],
+        robloxCompatible,
       });
     } else {
 
