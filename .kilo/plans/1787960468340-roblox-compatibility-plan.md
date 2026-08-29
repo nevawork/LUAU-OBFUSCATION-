@@ -1,112 +1,66 @@
-# Roblox Executor Compatibility Plan
+# Fix: executor-full.lua "attempt to call a nil value"
 
-## Goal
-Make obfuscated output run in both standard Roblox LocalScripts AND executor environments (Wave, Volt, Fluxus, Solara, Xeno, etc.) **without losing maximum VM protection**.
+## Root Cause
+`buildEnvSetup` in both VM generators hardcodes `loadstring` when initializing the global environment lookup:
 
-## Key Finding from Research
+**`src/vm/vm-gen.ts` line ~1993**
+```typescript
+L.push(`local ${n.genv}=loadstring(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
+```
 
-### Executor Landscape 2026
-- **Discontinued**: Krnl PC (late 2025), Synapse X (Oct 2023)
-- **Active**: Wave, Volt, Potassium, Solara, Xeno, Madium, Synapse Z, Fluxus, Delta, Hydrogen
-- Most provide: `loadstring`, `getgenv`, `isreadonly`, `setreadonly`, `debug` table access
+**`src/vm/reg-vm-gen.ts` line ~1872**
+```typescript
+L.push(`local ${n.genv}=loadstring(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
+```
 
-### Critical Insight
-The obfuscator's **true maximum protection** is in the bytecode transformations + VM interpreter:
-- Super operator fusion
-- NOP camouflage
-- Control flow flattening
-- Context-sensitive opcodes
-- Non-linear jumps
-- String pools + lazy decode
-- Obfuscated VM dispatch
+**`src/vm/reg-vm-gen.ts` line ~1917 (buildEnvFragments)**
+```typescript
+fragments.push({ code: `${n.genv}=loadstring(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`, layer: 1 });
+```
 
-The `wrapCustomCipher`, `wrapNestedVM`, `wrapStubVM` wrappers are **optional extra layers** that require `loadstring`. They encrypt the VM source and reload it at runtime.
+In executors that expose `load` but not `loadstring`, or in environments where `loadstring` is unavailable at the time the VM runtime executes, this produces `nil` and the VM crashes on startup.
 
-## Design Decision: Universal Mode
+The `wrapCustomCipher`/`wrapNestedVM`/`wrapStubVM` bootstraps already resolve `loadstring or load` safely, but the inner VM runtime does not.
 
-Instead of separate `--roblox` and `--executor` flags, implement a **single universal output** that:
-1. Preserves ALL maximum bytecode protections
-2. Detects environment at runtime
-3. Uses `loadstring`-based wrappers if available (executor)
-4. Falls back to native VM execution if not (standard Roblox)
+## Fix
 
-### Why this preserves "maximum VM"
-- All `level === "max"` transformations happen BEFORE wrappers
-- The VM interpreter itself is fully obfuscated in both paths
-- Only the wrapper layer (encrypted reload) is conditional
-- Executors get full max protection; standard Roblox gets everything except the loader wrapper
+### 1. `src/vm/vm-gen.ts` — `buildEnvSetup`
+Replace hardcoded `loadstring` with a runtime fallback pattern:
 
-## Implementation Plan
+```typescript
+const loadFn = randomName(3);
+L.push(`local ${loadFn}=${bRG}(${genv},${encLookup("loadstring")}) or ${bRG}(${genv},${encLookup("load")})`);
+L.push(`local ${n.genv}=${loadFn}(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
+```
 
-### 1. `src/vm/vm-gen.ts` — Universal wrapper selector
-- **Current lines:** 3668–3678
-- Replace the simple `if (!robloxCompatible)` checks with a runtime detection pattern:
-  ```lua
-  local _useWrappers = pcall(function() return loadstring end) or pcall(function() return load end)
-  ```
-- If `_useWrappers` is true → apply `wrapCustomCipher`, `wrapNestedVM`, `wrapStubVM`
-- If false → output the raw protected VM source
-- This creates ONE output file that adapts to its environment
+### 2. `src/vm/reg-vm-gen.ts` — `buildEnvSetup`
+Same change at line ~1872:
 
-### 2. `src/vm/vm-gen.ts` — Executor-aware debug handling
-- **Current lines:** 2152–2175
-- Replace the safe-copy-only approach with:
-  ```lua
-  if not isreadonly or not isreadonly(debug) then
-    -- Direct modification (executor path)
-    debug.getupvalue = nil
-    -- etc
-  else
-    -- Safe copy (standard Roblox path)
-    local safeDebug = {}
-    for k,v in pairs(debug) do safeDebug[k] = v end
-    safeDebug.getupvalue = nil
-    debug = safeDebug
-  end
-  ```
-- This works in both environments
+```typescript
+const loadFn = randomName(3);
+L.push(`local ${loadFn}=${n.bRG}(${n.genv},${encLookup("loadstring")}) or ${n.bRG}(${n.genv},${encLookup("load")})`);
+L.push(`local ${n.genv}=${loadFn}(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
+```
 
-### 3. `src/vm/reg-vm-gen.ts` — Add `robloxCompatible` support
-- Add `robloxCompatible?: boolean` to `RegVMGenOptions`
-- Add `robloxCompatible?: boolean` to `BuildCtx`
-- Update `buildEnvSetup` (lines 1844–1893):
-  - When `robloxCompatible`: avoid `loadstring(...)` pattern, write `getfenv(0) or _G` directly
-  - Create private env with `setmetatable({},{__index=genv})`
-  - Copy globals directly, build private writable `debug` table
-- Update `buildEnvFragments` (lines 1895–1945): same changes
-- Skip `encryptAndEncode` + `generateBootstrap` when `robloxCompatible` (lines 3670–3686)
-- Add executor-aware debug handling in max mode
+### 3. `src/vm/reg-vm-gen.ts` — `buildEnvFragments`
+Same change at line ~1917:
 
-### 4. `src/vm/reg-vm-gen.ts` — Universal wrapper selector
-- Same pattern as stack VM: runtime detection of `loadstring`/`load`
-- Apply wrappers only when available
+```typescript
+const loadFn = randomName(3);
+forwardDecls.push(loadFn, n.genv, n.env);
+fragments.push({ code: `${loadFn}=${n.bRG}(${n.genv},${encLookup("loadstring")}) or ${n.bRG}(${n.genv},${encLookup("load")})`, layer: 0 });
+fragments.push({ code: `${n.genv}=${loadFn}(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`, layer: 1 });
+```
 
-### 5. `src/cli/obfuscate.ts` — Keep `--roblox` flag
-- Keep existing `--roblox` flag
-- When `--roblox` is set, enable universal mode (runtime detection)
-- Pass `robloxCompatible: true` to `generateVM`
-
-### 6. `src/cli/reg-vm-obfuscate.ts` — Add `--roblox` flag
-- Add `--roblox` / `--roblox-compatible` flags
-- Pass `robloxCompatible` to `generateRegVM`
-
-### 7. `src/server.ts` — Add `robloxCompatible` option
-- Accept `robloxCompatible` from API request body
-- Pass to both `generateVM` and `generateRegVM`
-
-### 8. `README.md` — Document universal mode
-- Explain that `--roblox` produces output that works in BOTH standard Roblox and executors
-- The output detects its environment at runtime and adapts
+### 4. `src/vm/vm-gen.ts` — `buildEnvSetup` non-roblox path
+The same hardcoded `loadstring` issue exists in the stack VM's `buildEnvSetup` around line 1993. Apply the identical fix there.
 
 ## Validation
-1. `npm run build` succeeds
-2. Generate universal output: `npm run obfuscate -- samples/samples --vm --max --roblox -o samples/universal.lua`
-3. Verify output contains runtime detection code
-4. Verify output works when `loadstring` is present (executor path)
-5. Verify output works when `loadstring` is absent (Roblox path)
-6. All max-level bytecode protections are active in both paths
+1. `npm run build`
+2. `npm run obfuscate -- samples/samples --vm --max -o samples/executor-fixed.lua`
+3. Verify the output loads without `attempt to call a nil value` in the target executor
 
-## Risks
-- Universal mode output is slightly larger than single-mode output (contains both paths)
-- Runtime detection adds a small overhead at startup
-- `isreadonly` may not exist in some environments; code must handle nil gracefully
+## Notes
+- This is the exact same pattern already used successfully in `wrapCustomCipher`/`wrapNestedVM`/`wrapStubVM` bootstraps.
+- No obfuscation strength is lost; only the loader function resolution becomes more robust.
+- The `--roblox` path already avoids this because it never uses `loadstring` at all.

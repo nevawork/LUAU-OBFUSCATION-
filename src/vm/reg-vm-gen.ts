@@ -1902,7 +1902,11 @@ function buildEnvSetup(ctx: BuildCtx): string {
   const dec = randomName(4);
   L.push(`local function ${dec}(_t) local _s="";for _i=1,#_t do _s=_s..string.char(${n.bBxor}(_t[_i],${n.bBand}(${envKey}+(_i-1)*${envStep},0xFF))) end;return _s end`);
 
-  L.push(`local ${n.genv}=loadstring(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
+  const loadFn = randomName(3);
+  L.push(`local ${loadFn}=nil`);
+  L.push(`do local _ok,_v=pcall(function() return _G[${luaEsc("loadstring")}] end);if _ok and _v~=nil then ${loadFn}=_v end end`);
+  L.push(`if not ${loadFn} then local _ok,_v=pcall(function() return _G[${luaEsc("load")}] end);if _ok and _v~=nil then ${loadFn}=_v end end`);
+  L.push(`local ${n.genv}=${loadFn}(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`);
 
   L.push(`local ${n.env}=${n.bSetmeta}({},{[${dec}(${encS("__index")})]=function(_,k) local ok,v=${n.bPcall}(function() return ${n.genv}[k] end);if ok then return v end;return nil end})`);
 
@@ -1969,10 +1973,13 @@ function buildEnvFragments(ctx: BuildCtx): { fragments: Fragment[]; forwardDecls
   };
 
   const dec = randomName(4);
-  forwardDecls.push(dec, n.genv, n.env);
+  const loadFn = randomName(3);
+  forwardDecls.push(dec, loadFn, n.genv, n.env);
 
   fragments.push({ code: `${dec}=function(_t) local _s="";for _i=1,#_t do _s=_s..string.char(${n.bBxor}(_t[_i],${n.bBand}(${envKey}+(_i-1)*${envStep},0xFF))) end;return _s end`, layer: 0 });
-  fragments.push({ code: `${n.genv}=loadstring(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`, layer: 1 });
+  fragments.push({ code: `do local _ok,_v=pcall(function() return _G[${luaEsc("loadstring")}] end);if _ok and _v~=nil then ${loadFn}=_v end end`, layer: 0 });
+  fragments.push({ code: `if not ${loadFn} then local _ok,_v=pcall(function() return _G[${luaEsc("load")}] end);if _ok and _v~=nil then ${loadFn}=_v end end`, layer: 0 });
+  fragments.push({ code: `${n.genv}=${loadFn}(${dec}(${encS("return (type(getfenv)=='function' and getfenv(0)) or _G")}))()`, layer: 1 });
   fragments.push({ code: `${n.env}=${n.bSetmeta}({},{[${dec}(${encS("__index")})]=function(_,k) local ok,v=${n.bPcall}(function() return ${n.genv}[k] end);if ok then return v end;return nil end})`, layer: 2 });
 
   const allGlobals = ctx.includeExecutor ? [...CORE_GLOBALS, ...EXECUTOR_GLOBALS] : [...CORE_GLOBALS];
